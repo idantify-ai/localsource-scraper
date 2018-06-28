@@ -23,14 +23,16 @@ Examples:
   localsource_scraper.py -i summary.txt
 
 Help:
-  For help using this tool, please open an issue on the Github repository:
+  For help using this tool open an issue on the Github repository:
   https://github.com/idantify-ai/localsource-scraper/issues
 """
 
 from __future__ import print_function
 from docopt     import docopt
-from os.path    import isfile, splitext
+from os         import environ, makedirs
+from os.path    import isfile, isdir, splitext, exists
 from pandas     import read_table, read_csv, read_excel, read_json
+from shutil     import copyfile
 
 
 VERSION         = '0.1'
@@ -72,27 +74,74 @@ def scrape_data_frame(df):
     """
     For each row of the dataframe ``df``, queries the DB to retrieve the value
     of missing fields, inserts the image into the DB and copies it to the 
-    appropriate directory according to ?.
+    appropriate directory.
     """
     
-    db_ids          = ['domainId', 'kingdomId', 'phylumId', 'classId', 'orderId',
-                       'familyId', 'genusId', 'imagesId']
     nimages_scraped = 0
+    nimages_exist   = 0
+    nimages_fail    = 0
     nimages         = df.shape[0]
-    
+
+    try:
+        db_url = environ['SpecifierApiUrl']
+    except KeyError:
+        print('Environment variable <SpecifierApiUrl> not defined!   ¯\_(ツ)_/¯', sep='')
+        exit(FAILURE)        
+
+    try:
+        db_dir = environ['SpecifierImagesDirectory']
+        if not isdir(db_dir):
+            print('Directory ', db_dir, ' not found!   ¯\_(ツ)_/¯', sep='')
+        exit(FAILURE)                    
+    except KeyError:
+        print('Environment variable <SpecifierImagesDirectory> not defined!   ¯\_(ツ)_/¯',
+              sep='')
+        exit(FAILURE)        
+        
     for i in range(nimages):
         filename = df.iloc[i]['FileName']
         genus    = df.iloc[i]['Genus']
         species  = df.iloc[i]['Species']
 
-        # Query the DB to get other fields..
+        if isfile(filename):
+            rval   = insert_image_to_db(genus, species, filename, db_url)
+            status = rval[0]
+            img_id = rval[1]
+            dir_id = rval[2]
+        else:
+            status = 'fail'
 
-        # Insert image to the DB..
+        if status == 'added':            
+            if not exists(dir_id):
+	        makedirs(dir_id, exist_ok = True)
+            copyfile(filename, join(dir_id, img_id + splitext(filename)[1]))
+            nimages_scraped = nimages_scraped + 1
+        elif status == 'exist':
+            nimages_exist   = nimages_exist + 1
+        elif status == 'fail':
+            nimages_fail    = nimages_fail + 1
 
-        # Copy image to the proper directory..
+        print('Scraping image ', str(i + 1), '/', str(nimages), ': ',
+              str(nimages_scraped), ' added, ',
+              str(nimages_exist), ' skipped, ',
+              str(nimages_fail), ' failed to add.', sep = '', endl = '\r')
     
     return nimages_scraped
 
+
+def insert_image_to_db(genus, species, img):
+    """
+    
+    returns: `added`, `exist`, `fail`
+        status = rval[0]
+        img_id = rval[1]
+        dir_id = rval[2]
+    """
+    db_ids          = ['domainId', 'kingdomId', 'phylumId', 'classId', 'orderId',
+                       'familyId', 'genusId', 'imagesId']
+
+    return ['fail', None, None]
+    
 
 def getIDString(titleList):
     """
@@ -162,7 +211,7 @@ def save_imgs(img, string):
 
 def main():
     """
-
+    Main entry point for the ``localsource-scraper.py`` script.
     """
     
     options = docopt(__doc__, version = CLI + ' ' + VERSION)
