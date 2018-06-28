@@ -68,6 +68,98 @@ def read_data_frame(fname):
     return df
 
 
+def scrape_data_frame(df):
+    """
+    For each row of the dataframe ``df``, queries the DB to retrieve the value
+    of missing fields, inserts the image into the DB and copies it to the 
+    appropriate directory according to ?.
+    """
+    
+    db_ids          = ['domainId', 'kingdomId', 'phylumId', 'classId', 'orderId',
+                       'familyId', 'genusId', 'imagesId']
+    nimages_scraped = 0
+    nimages         = df.shape[0]
+    
+    for i in range(nimages):
+        filename = df.iloc[i]['FileName']
+        genus    = df.iloc[i]['Genus']
+        species  = df.iloc[i]['Species']
+
+        # Query the DB to get other fields..
+
+        # Insert image to the DB..
+
+        # Copy image to the proper directory..
+    
+    return nimages_scraped
+
+
+def getIDString(titleList):
+    """
+    C&P from bugguide-scraper: 
+
+    creates the id string that will be used for the file directory and 
+    the data base.
+
+    titleList = ["eukarya", "animalia", "arthropoda", "class", "order", 
+                 "family", "genus", "species"]
+
+    """
+	
+    payload = {}
+    headers = {}
+    idDirectory = ""
+
+    # Loop through the taxonomy categories in the titleList list in order
+    # to run against API and
+    # check for existing ids and create them if none exist
+    for x in range(len(titleList)):
+	url = os.environ['SpecifierApiUrl'] + titleList[x]
+	if(titleList[x] == "domains"):
+	    payload = {"name": "eukarya"}
+	    headers = {'content-type': 'application/json'}
+	else:
+	    payload = {idList[x-1] : idIntList[x-1], "name" : taxonomyList[x]}
+	    headers = {'content-type': 'application/json'}
+		
+	r = requests.post(url, data=json.dumps(payload), headers=headers)
+	response = json.loads(r.content)
+	temp = response['id']
+	idIntList[x] = temp
+	#add id's to directory string for directory tree.
+	idDirectory = idDirectory + "/" + str(response['id'])
+
+    return idDirectory
+
+
+def save_imgs(img, string):
+    """
+    Copy & pasted from BugGuide-scraper:
+
+    creates directory and stores jpg file
+    """
+	
+    #payload to be sent to retrieve the image id
+    payload = { "speciesId": idIntList[7], "imageShotTypeId": 4,"url": img}
+    headers = {'content-type': 'application/json'}
+
+    #send payload
+    r = requests.post(os.environ['SpecifierApiUrl'] + "images", data=json.dumps(payload), headers=headers)
+
+    #parse response
+    response = json.loads(r.content)
+
+    #adds image id to string
+    string += "/" + str(response['id'])
+
+    #check if the path already exists and create if it doesn't
+    if not os.path.exists(string):
+	os.makedirs(os.path.dirname(string), exist_ok=True)
+    #save image file in to the path
+    urllib.request.urlretrieve(img, string+".jpg")
+
+        
+
 def main():
     """
 
@@ -77,8 +169,17 @@ def main():
     if options['--input']:
         fname = options['--input']
         if isfile(fname):
-            df = read_data_frame(fname)
+            df              = read_data_frame(fname)
+            nimages         = df.shape[0]
+            nimages_scraped = scrape_data_frame(df)
             
+            if nimages_scraped > 0:
+                print(str(nimages_scraped), '/', str(nimages),
+                      ' images successfully added to the DB!     \(^-^)/', sep='')
+                exit(SUCCESS)        
+            else:
+                print('Something went wrong. No images added to the DB!  ¯\_(ツ)_/¯', sep='')
+                exit(FAILURE)                
         else:
             print('File not found: ', fname, ' ¯\_(ツ)_/¯', sep='')
             exit(FAILURE)        
