@@ -30,16 +30,17 @@ Help:
 from __future__ import print_function
 from docopt     import docopt
 from os         import environ, makedirs
-from os.path    import isfile, isdir, splitext, exists
+from os.path    import isfile, isdir, splitext, exists, join
 from pandas     import read_table, read_csv, read_excel, read_json
 from shutil     import copyfile
-
+from json       import loads, dumps
+from requests   import post
 
 VERSION         = '0.1'
 CLI             = 'localsource_scraper.py'
 SUCCESS         = 0
 FAILURE         = 1
-REQUIRED_FIELDS = ['FileName', 'Genus', 'Species']
+REQUIRED_FIELDS = ['FileName', 'Genus', 'Species', 'ShotType']
 
 
 def read_data_frame(fname):
@@ -78,18 +79,28 @@ def scrape_data_frame(df):
     """
     
     nimages_scraped = 0
-    nimages_exist   = 0
     nimages_fail    = 0
     nimages         = df.shape[0]
 
     try:
-        db_url = environ['SpecifierApiUrl']
+        # api_url = environ['SpecifierApiUrl']
+        api_url = "http://tclasol-jkj3dh2.dhcp.asu.edu:81/api/"
     except KeyError:
         print('Environment variable <SpecifierApiUrl> not defined!   ¯\_(ツ)_/¯', sep='')
+        exit(FAILURE)
+
+    try:
+        headers   = {'content-type': 'application/json'}
+        r         = requests.get(api_url + "image-shot-types", headers = headers)
+        if r.status_code != 200:
+            raise ConnectionError
+    except:
+        print('The Specifier Api can not be reached!   ¯\_(ツ)_/¯', sep='')
         exit(FAILURE)        
 
     try:
-        db_dir = environ['SpecifierImagesDirectory']
+        #db_dir = environ['SpecifierImagesDirectory']
+        db_dir = ""
         if not isdir(db_dir):
             print('Directory ', db_dir, ' not found!   ¯\_(ツ)_/¯', sep='')
         exit(FAILURE)                    
@@ -97,117 +108,122 @@ def scrape_data_frame(df):
         print('Environment variable <SpecifierImagesDirectory> not defined!   ¯\_(ツ)_/¯',
               sep='')
         exit(FAILURE)        
+
+
+#check if you can write to db_dir..
         
     for i in range(nimages):
         filename = df.iloc[i]['FileName']
         genus    = df.iloc[i]['Genus']
         species  = df.iloc[i]['Species']
+        shottype = df.iloc[i]['ShotType']
 
         if isfile(filename):
-            rval   = insert_image_to_db(genus, species, filename, db_url)
-            status = rval[0]
-            img_id = rval[1]
-            dir_id = rval[2]
+            rval   = insert_image_to_db(api_url, db_dir, genus, species, shottype, filename)
+            dpath  = rval[0]
+            dfname = rval[1]
+            status = 'added'
         else:
             status = 'fail'
 
         if status == 'added':            
-            if not exists(dir_id):
-	        makedirs(dir_id, exist_ok = True)
-            copyfile(filename, join(dir_id, img_id + splitext(filename)[1]))
+            if not exists(dpath):
+                makedirs(dpath, exist_ok = True)
+            copyfile(filename, join(dpath, dfname))
             nimages_scraped = nimages_scraped + 1
-        elif status == 'exist':
-            nimages_exist   = nimages_exist + 1
         elif status == 'fail':
             nimages_fail    = nimages_fail + 1
 
         print('Scraping image ', str(i + 1), '/', str(nimages), ': ',
               str(nimages_scraped), ' added, ',
-              str(nimages_exist), ' skipped, ',
               str(nimages_fail), ' failed to add.', sep = '', endl = '\r')
     
     return nimages_scraped
 
 
-def insert_image_to_db(genus, species, img):
+def insert_image_to_db(api_url, db_dir, genus, species, shottype, filename):
     """
-    
-    returns: `added`, `exist`, `fail`
-        status = rval[0]
-        img_id = rval[1]
-        dir_id = rval[2]
+    Add an image to the DB using the API. 
+
+    returns:
+        filename, the file name including destination path where to copy the
+                  newly added image
     """
-    db_ids          = ['domainId', 'kingdomId', 'phylumId', 'classId', 'orderId',
-                       'familyId', 'genusId', 'imagesId']
 
-    return ['fail', None, None]
-    
+    # Find domain id
+    headers   = {'content-type': 'application/json'}
+    payload   = {"name": "eukarya"}
+    r         = post(api_url + "domains", data=dumps(payload), headers = headers)
+    response  = loads(r.content)
+    domainId  = response['id']
 
-def getIDString(titleList):
-    """
-    C&P from bugguide-scraper: 
+    # Find kingdom id 
+    payload   = {"domainId": domainId, "name": "animalia"}
+    r         = post(api_url + "kingdoms", data=dumps(payload), headers = headers)
+    response  = loads(r.content)
+    kingdomId = response['id']
 
-    creates the id string that will be used for the file directory and 
-    the data base.
+    # Find phylum id
+    payload   = {"kingdomId": kingdomId, "name": "arthropoda"}
+    r         = post(api_url + "phyla", data=dumps(payload), headers = headers)
+    response  = loads(r.content)
+    phylumId  = response['id']
 
-    titleList = ["eukarya", "animalia", "arthropoda", "class", "order", 
-                 "family", "genus", "species"]
+    # Find class id
+    payload   = {"phylumId": phylumId, "name": "insecta"}
+    r         = post(api_url + "classes", data=dumps(payload), headers = headers)
+    response  = loads(r.content)
+    classId   = response['id']
 
-    """
-	
-    payload = {}
-    headers = {}
-    idDirectory = ""
+    # Find order id
+    payload   = {"classId": classId, "name": "hymenoptera"}
+    r         = post(api_url + "orders", data=dumps(payload), headers = headers)
+    response  = loads(r.content)
+    orderId   = response['id']
 
-    # Loop through the taxonomy categories in the titleList list in order
-    # to run against API and
-    # check for existing ids and create them if none exist
-    for x in range(len(titleList)):
-	url = os.environ['SpecifierApiUrl'] + titleList[x]
-	if(titleList[x] == "domains"):
-	    payload = {"name": "eukarya"}
-	    headers = {'content-type': 'application/json'}
-	else:
-	    payload = {idList[x-1] : idIntList[x-1], "name" : taxonomyList[x]}
-	    headers = {'content-type': 'application/json'}
-		
-	r = requests.post(url, data=json.dumps(payload), headers=headers)
-	response = json.loads(r.content)
-	temp = response['id']
-	idIntList[x] = temp
-	#add id's to directory string for directory tree.
-	idDirectory = idDirectory + "/" + str(response['id'])
+    # Find family id
+    payload   = {"orderId": orderId, "name": "formicidae"}
+    r         = post(api_url + "families", data=dumps(payload), headers = headers)
+    response  = loads(r.content)
+    familyId  = response['id']
 
-    return idDirectory
+    # Find genus id
+    payload   = {"familyId": familyId, "name": genus.lower()}
+    r         = post(api_url + "genera", data=dumps(payload), headers = headers)
+    response  = loads(r.content)
+    genusId   = response['id']
 
+    # Find species id
+    payload   = {"genusId": genusId, "name": species.lower()}
+    r         = post(api_url + "species", data=dumps(payload), headers = headers)
+    response  = loads(r.content)
+    speciesId = response['id']
 
-def save_imgs(img, string):
-    """
-    Copy & pasted from BugGuide-scraper:
+    # Find species id
+    payload   = {"genusId": genusId, "name": species.lower()}
+    r         = post(api_url + "species", data=dumps(payload), headers = headers)
+    response  = loads(r.content)
+    speciesId = response['id']
 
-    creates directory and stores jpg file
-    """
-	
-    #payload to be sent to retrieve the image id
-    payload = { "speciesId": idIntList[7], "imageShotTypeId": 4,"url": img}
-    headers = {'content-type': 'application/json'}
+    # Find shot type id
+    #r         = requests.get(api_url + "image-shot-types", headers = headers)
+    #shottypes = loads(r.content)
+    #sttypeId  = [st for st in shottypes if st["sourceKey"] == shottype][0]["id"]
+    #if sttypeId < 1 or sttypeId > 4: 
+    #    sttypeId = 4
 
-    #send payload
-    r = requests.post(os.environ['SpecifierApiUrl'] + "images", data=json.dumps(payload), headers=headers)
+    # Add image to the db and get its id
+    payload   = {"speciesId": speciesId, "imageShotTypeId": sttypeId, "url": filename}
+    r         = requests.post(api_url + "images", data=json.dumps(payload), headers = headers)
+    response  = json.loads(r.content)
+    imageId   = response['id']
 
-    #parse response
-    response = json.loads(r.content)
+    # Create destination path
+    dest_path  = join(str(db_dir), str(domainId), str(kingdomId), str(phylumId), str(classId), str(orderId), str(familyId), str(genusId), str(speciesId), str(shottype))
+    dest_fname = str(imageId) + splitext(filename)[1]
 
-    #adds image id to string
-    string += "/" + str(response['id'])
-
-    #check if the path already exists and create if it doesn't
-    if not os.path.exists(string):
-	os.makedirs(os.path.dirname(string), exist_ok=True)
-    #save image file in to the path
-    urllib.request.urlretrieve(img, string+".jpg")
-
-        
+    return [dest_path, dest_fname]
+           
 
 def main():
     """
